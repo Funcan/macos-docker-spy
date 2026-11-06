@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 )
@@ -76,5 +77,60 @@ func TestRunJobHostOptions(t *testing.T) {
 	}
 	if len(res.Stdout) == 0 {
 		t.Error("expected output from the VM's PID 1")
+	}
+}
+
+func TestOtherContainersRunning(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	out, err := exec.Command("docker", "run", "-d", "--rm", testImage, "sleep", "60").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := strings.TrimSpace(string(out))
+	defer func() { _ = exec.Command("docker", "rm", "-f", id).Run() }()
+
+	running, err := OtherContainersRunning(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !running {
+		t.Error("got false with an unlabelled container running")
+	}
+}
+
+func TestOtherContainersRunningIgnoresJobs(t *testing.T) {
+	requireDocker(t)
+	ctx := context.Background()
+	if running, err := OtherContainersRunning(ctx); err != nil || running {
+		t.Skipf("other containers already running (err %v)", err)
+	}
+
+	done := make(chan error)
+	go func() {
+		_, err := RunJob(ctx, 30*time.Second, testImage, []string{"sleep", "10"}, JobOptions{})
+		done <- err
+	}()
+	// Wait until the job's container is running before checking.
+	for {
+		out, err := exec.Command("docker", "ps", "-q", "--filter", "label="+jobLabel).Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(out) > 0 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	running, err := OtherContainersRunning(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if running {
+		t.Error("got true with only a RunJob container running")
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }

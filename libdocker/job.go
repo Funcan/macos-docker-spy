@@ -12,6 +12,10 @@ import (
 	"github.com/moby/moby/client"
 )
 
+// jobLabel marks containers started by RunJob, so OtherContainersRunning can
+// ignore them.
+const jobLabel = "com.github.funcan.macos-docker-spy.job"
+
 // JobOptions are extra settings for the container RunJob starts.
 type JobOptions struct {
 	Privileged bool // docker run --privileged
@@ -53,7 +57,10 @@ func RunJob(ctx context.Context, timeout time.Duration, image string, args []str
 		hostConfig.PidMode = "host"
 	}
 	created, err := cli.ContainerCreate(ctx, client.ContainerCreateOptions{
-		Config:     &container.Config{Image: image, Cmd: args, AttachStdout: true, AttachStderr: true},
+		Config: &container.Config{
+			Image: image, Cmd: args, AttachStdout: true, AttachStderr: true,
+			Labels: map[string]string{jobLabel: "true"},
+		},
 		HostConfig: hostConfig,
 	})
 	if err != nil {
@@ -109,4 +116,28 @@ func RunJob(ctx context.Context, timeout time.Duration, image string, args []str
 	<-copied
 	result := JobResult{Stdout: stdout.Bytes(), Stderr: stderr.Bytes(), ExitCode: -1}
 	return result, fmt.Errorf("container did not finish: %w", runCtx.Err())
+}
+
+// OtherContainersRunning reports whether any containers not started by RunJob
+// are running. Docker Desktop's Resource Saver stops the VM once no containers
+// have run for a while; callers can use this to avoid running jobs, and so
+// keeping the VM awake, when nothing else is using it. Check
+// DockerDesktopStatus first, as listing containers may wake a stopped VM.
+func OtherContainersRunning(ctx context.Context) (bool, error) {
+	cli, err := client.New(client.FromEnv)
+	if err != nil {
+		return false, fmt.Errorf("docker client: %w", err)
+	}
+	defer func() { _ = cli.Close() }()
+
+	list, err := cli.ContainerList(ctx, client.ContainerListOptions{})
+	if err != nil {
+		return false, fmt.Errorf("listing containers: %w", err)
+	}
+	for _, c := range list.Items {
+		if _, ok := c.Labels[jobLabel]; !ok {
+			return true, nil
+		}
+	}
+	return false, nil
 }
