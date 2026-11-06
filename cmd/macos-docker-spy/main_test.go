@@ -25,6 +25,51 @@ func TestStatLines(t *testing.T) {
 	}
 }
 
+func TestParsePercent(t *testing.T) {
+	for _, tt := range []struct {
+		in   string
+		want int
+		ok   bool
+	}{
+		{"0", 0, true},
+		{" 100 ", 100, true},
+		{"-1", 0, false},
+		{"101", 0, false},
+		{"", 0, false},
+		{"50%", 0, false},
+	} {
+		got, err := parsePercent(tt.in)
+		if (err == nil) != tt.ok || got != tt.want {
+			t.Errorf("parsePercent(%q) = %d, %v", tt.in, got, err)
+		}
+	}
+}
+
+func TestOverThresholds(t *testing.T) {
+	// 80% disk, memory 80% used (buff/cache counted as available), 80% CPU busy.
+	s := libdocker.VMStats{
+		DiskUsedPercent: 80,
+		MemUsedKB:       800, MemBuffCacheKB: 150, MemFreeKB: 50,
+		CPUIdle: 20,
+	}
+	for _, tt := range []struct {
+		name                       string
+		diskWarn, memWarn, cpuWarn int
+		want                       warnings
+	}{
+		{"at thresholds", 80, 80, 80, warnings{}},
+		{"just below thresholds", 79, 79, 79, warnings{disk: true, mem: true, cpu: true}},
+		{"only memory", 90, 79, 90, warnings{mem: true}},
+	} {
+		if got := overThresholds(s, tt.diskWarn, tt.memWarn, tt.cpuWarn); got != tt.want {
+			t.Errorf("%s: got %+v, want %+v", tt.name, got, tt.want)
+		}
+	}
+	if got := overThresholds(libdocker.VMStats{CPUIdle: 100}, 0, 0, 0); got != (warnings{}) {
+		t.Errorf("zero memory: got %+v, want no warnings", got)
+	}
+}
+
 func TestParseRefreshSeconds(t *testing.T) {
 	for _, tt := range []struct {
 		in   string

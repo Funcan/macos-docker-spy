@@ -26,6 +26,13 @@ const (
 	prefRefreshSeconds    = "refreshSeconds"
 	defaultRefreshSeconds = 10
 	minRefreshSeconds     = 5
+
+	prefDiskWarnPercent    = "diskWarnPercent"
+	defaultDiskWarnPercent = 90
+	prefMemWarnPercent     = "memWarnPercent"
+	defaultMemWarnPercent  = 80
+	prefCPUWarnPercent     = "cpuWarnPercent"
+	defaultCPUWarnPercent  = 95
 )
 
 func main() {
@@ -36,6 +43,11 @@ func main() {
 		os.Exit(1)
 	}
 	greenIcon, err := icon(green)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	yellowIcon, err := icon(yellow)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -65,15 +77,17 @@ func main() {
 	prefs := preferencesWindow(a, agent, exe)
 
 	m := &menu{
-		tray:      tray,
-		greenIcon: fyne.NewStaticResource("green.png", greenIcon),
-		redIcon:   fyne.NewStaticResource("red.png", redIcon),
-		menu:      fyne.NewMenu("Docker Desktop VM"),
-		disk:      &fyne.MenuItem{Label: "Disk: -", Disabled: true},
-		mem:       &fyne.MenuItem{Label: "Memory: -", Disabled: true},
-		load:      &fyne.MenuItem{Label: "Load: -", Disabled: true},
-		cpu:       &fyne.MenuItem{Label: "CPU: -", Disabled: true},
-		err:       &fyne.MenuItem{Disabled: true},
+		tray:       tray,
+		settings:   a.Preferences(),
+		greenIcon:  fyne.NewStaticResource("green.png", greenIcon),
+		yellowIcon: fyne.NewStaticResource("yellow.png", yellowIcon),
+		redIcon:    fyne.NewStaticResource("red.png", redIcon),
+		menu:       fyne.NewMenu("Docker Desktop VM"),
+		disk:       &fyne.MenuItem{Label: "Disk: -", Disabled: true},
+		mem:        &fyne.MenuItem{Label: "Memory: -", Disabled: true},
+		load:       &fyne.MenuItem{Label: "Load: -", Disabled: true},
+		cpu:        &fyne.MenuItem{Label: "CPU: -", Disabled: true},
+		err:        &fyne.MenuItem{Disabled: true},
 		// Fyne only adds its own Quit after drawing the menu, so it would be
 		// missing; with IsQuit set, Fyne makes this one quit the app.
 		quit: &fyne.MenuItem{Label: "Quit", IsQuit: true},
@@ -81,7 +95,8 @@ func main() {
 			prefs.Show()
 			prefs.RequestFocus()
 		}),
-		lastDisk: "-",
+		lastDisk:        "-",
+		lastDiskPercent: -1,
 	}
 	m.menu.Items = []*fyne.MenuItem{m.disk, m.mem, m.load, m.cpu, fyne.NewMenuItemSeparator(), m.prefs, m.quit}
 	tray.SetSystemTrayMenu(m.menu)
@@ -115,13 +130,19 @@ func main() {
 }
 
 type menu struct {
-	tray                      desktop.App
-	greenIcon, redIcon        fyne.Resource
-	menu                      *fyne.Menu
-	disk, mem, load, cpu, err *fyne.MenuItem
-	prefs, quit               *fyne.MenuItem
-	lastDisk                  string
+	tray                           desktop.App
+	settings                       fyne.Preferences
+	greenIcon, yellowIcon, redIcon fyne.Resource
+	menu                           *fyne.Menu
+	disk, mem, load, cpu, err      *fyne.MenuItem
+	prefs, quit                    *fyne.MenuItem
+	lastDisk                       string
+	// -1 until the disk has been measured.
+	lastDiskPercent int
 }
+
+// warnings says which stats are over their warning thresholds.
+type warnings struct{ disk, mem, cpu bool }
 
 // refresh updates the icon and menu. It never wakes the VM: stats are only
 // collected when Docker Desktop is running and other containers are using it,
@@ -132,43 +153,60 @@ func (m *menu) refresh() {
 
 	status, err := libdocker.DockerDesktopStatus(ctx)
 	if errors.Is(err, libdocker.ErrDesktopNotRunning) || (err == nil && status.Status != "running") {
-		m.show(whaleTemplate, "-", "-", "-", "-", nil)
+		m.show(whaleTemplate, "-", "-", "-", "-", warnings{}, nil)
 		return
 	}
 	if err != nil {
-		m.show(m.redIcon, "-", "-", "-", "-", err)
+		m.show(m.redIcon, "-", "-", "-", "-", warnings{}, err)
 		return
 	}
 
+	diskWarn := m.settings.IntWithFallback(prefDiskWarnPercent, defaultDiskWarnPercent)
+	memWarn := m.settings.IntWithFallback(prefMemWarnPercent, defaultMemWarnPercent)
+	cpuWarn := m.settings.IntWithFallback(prefCPUWarnPercent, defaultCPUWarnPercent)
+
 	busy, err := libdocker.OtherContainersRunning(ctx)
 	if err != nil {
-		m.show(m.redIcon, "-", "-", "-", "-", err)
+		m.show(m.redIcon, "-", "-", "-", "-", warnings{}, err)
 		return
 	}
 	if !busy {
-		m.show(whaleTemplate, m.lastDisk, "(idle)", "(idle)", "(idle)", nil)
+		// The disk keeps filling while idle, so its last value still counts.
+		w := warnings{disk: m.lastDiskPercent > diskWarn}
+		var icon fyne.Resource = whaleTemplate
+		if w.disk {
+			icon = m.yellowIcon
+		}
+		m.show(icon, m.lastDisk, "(idle)", "(idle)", "(idle)", w, nil)
 		return
 	}
 
 	stats, err := libdocker.CollectVMStats(ctx)
 	if err != nil {
-		m.show(m.redIcon, "-", "-", "-", "-", err)
+		m.show(m.redIcon, "-", "-", "-", "-", warnings{}, err)
 		return
 	}
 	disk, mem, load, cpu := statLines(stats)
 	m.lastDisk = disk
-	m.show(m.greenIcon, disk, mem, load, cpu, nil)
+	m.lastDiskPercent = stats.DiskUsedPercent
+	w := overThresholds(stats, diskWarn, memWarn, cpuWarn)
+	icon := m.greenIcon
+	if w.disk || w.mem || w.cpu {
+		icon = m.yellowIcon
+	}
+	m.show(icon, disk, mem, load, cpu, w, nil)
 }
 
-// show sets the icon and menu, adding an error item if err isn't nil. It is
-// safe to call from any goroutine.
-func (m *menu) show(icon fyne.Resource, disk, mem, load, cpu string, err error) {
+// show sets the icon and menu, marking stats that are over their thresholds
+// and adding an error item if err isn't nil. It is safe to call from any
+// goroutine.
+func (m *menu) show(icon fyne.Resource, disk, mem, load, cpu string, w warnings, err error) {
 	fyne.Do(func() {
 		m.tray.SetSystemTrayIcon(icon)
-		m.disk.Label = "Disk: " + disk
-		m.mem.Label = "Memory: " + mem
+		m.disk.Label = warnPrefix(w.disk) + "Disk: " + disk
+		m.mem.Label = warnPrefix(w.mem) + "Memory: " + mem
 		m.load.Label = "Load: " + load
-		m.cpu.Label = "CPU: " + cpu
+		m.cpu.Label = warnPrefix(w.cpu) + "CPU: " + cpu
 		m.menu.Items = []*fyne.MenuItem{m.disk, m.mem, m.load, m.cpu}
 		if err != nil {
 			// Job errors can include a container's multi-line stderr.
@@ -208,11 +246,31 @@ func preferencesWindow(a fyne.App, agent, exe string) fyne.Window {
 		}
 	}
 
+	form := widget.NewForm(widget.NewFormItem("Refresh every (seconds)", refresh))
+	for _, t := range []struct {
+		label, key string
+		def        int
+	}{
+		{"Disk warning (%)", prefDiskWarnPercent, defaultDiskWarnPercent},
+		{"Memory warning (%)", prefMemWarnPercent, defaultMemWarnPercent},
+		{"CPU warning (%)", prefCPUWarnPercent, defaultCPUWarnPercent},
+	} {
+		e := widget.NewEntry()
+		e.SetText(strconv.Itoa(a.Preferences().IntWithFallback(t.key, t.def)))
+		e.Validator = func(s string) error {
+			_, err := parsePercent(s)
+			return err
+		}
+		e.OnChanged = func(s string) {
+			if n, err := parsePercent(s); err == nil {
+				a.Preferences().SetInt(t.key, n)
+			}
+		}
+		form.Append(t.label, e)
+	}
+
 	// Sized for the settings still to come, rather than shrunk to fit them.
-	w.SetContent(container.NewPadded(container.NewVBox(
-		login,
-		widget.NewForm(widget.NewFormItem("Refresh every (seconds)", refresh)),
-	)))
+	w.SetContent(container.NewPadded(container.NewVBox(login, form)))
 	w.Resize(fyne.NewSize(400, 240))
 	w.SetCloseIntercept(w.Hide)
 	return w
@@ -228,6 +286,40 @@ func parseRefreshSeconds(s string) (int, error) {
 		return 0, fmt.Errorf("must be at least %d", minRefreshSeconds)
 	}
 	return n, nil
+}
+
+// parsePercent parses a warning threshold typed into Preferences.
+func parsePercent(s string) (int, error) {
+	n, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil {
+		return 0, errors.New("not a whole number")
+	}
+	if n < 0 || n > 100 {
+		return 0, errors.New("must be between 0 and 100")
+	}
+	return n, nil
+}
+
+// overThresholds says which of s's stats are strictly above their warning
+// thresholds. Memory counts buff/cache as available, as the kernel can
+// reclaim it, and CPU is busy for whatever isn't idle.
+func overThresholds(s libdocker.VMStats, diskWarn, memWarn, cpuWarn int) warnings {
+	var memPercent float64
+	if total := s.MemUsedKB + s.MemBuffCacheKB + s.MemFreeKB; total > 0 {
+		memPercent = 100 * float64(s.MemUsedKB) / float64(total)
+	}
+	return warnings{
+		disk: s.DiskUsedPercent > diskWarn,
+		mem:  memPercent > float64(memWarn),
+		cpu:  100-s.CPUIdle > float64(cpuWarn),
+	}
+}
+
+func warnPrefix(over bool) string {
+	if over {
+		return "⚠️ "
+	}
+	return ""
 }
 
 // statLines formats stats for the disk, memory, load and CPU menu items.
