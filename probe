@@ -1,0 +1,27 @@
+#!/bin/sh
+set -eu
+
+status=$(docker desktop status --format json 2>/dev/null) || status=
+case $status in
+*'"Status": "running"'*) ;;
+*) echo "VM not running"; exit 1 ;;
+esac
+
+docker image inspect docker-spy >/dev/null 2>&1 ||
+	docker build -q -t docker-spy "$(dirname "$0")" >/dev/null
+
+docker run --rm --privileged --pid=host docker-spy sh -c \
+	'df -k /var/lib/docker | tail -n 1; free -k | grep "^Mem:"; cat /proc/loadavg' |
+awk '
+# Round up, as df -h does
+function ceil(x) { return int(x) + (x > int(x)) }
+function human(kb) {
+	if (kb < 1024 * 1024) return sprintf("%d MB", ceil(kb / 1024))
+	gb = kb / 1024 / 1024
+	return gb < 10 ? sprintf("%.1f GB", ceil(gb * 10) / 10) : sprintf("%d GB", ceil(gb))
+}
+NR == 1 { disk = sprintf("Disk %s of %s used (%s)  %s free", human($3), human($2), $5, human($4)) }
+NR == 2 { mem = sprintf("%s used %s buff/cache %s free", human($3), human($6), human($4)) }
+NR == 3 { load = sprintf("load %s %s %s", $1, $2, $3) }
+END { print disk " | " mem " | " load }
+'
