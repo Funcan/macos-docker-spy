@@ -5,7 +5,9 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -18,7 +20,13 @@ import (
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/Funcan/macos-docker-spy/internal/version"
 	"github.com/Funcan/macos-docker-spy/libdocker"
+)
+
+const (
+	appName = "macos-docker-spy"
+	repoURL = "https://github.com/Funcan/macos-docker-spy"
 )
 
 // Preference keys and defaults.
@@ -36,6 +44,13 @@ const (
 )
 
 func main() {
+	showVersion := flag.Bool("version", false, "print the version and exit")
+	flag.Parse()
+	if *showVersion {
+		fmt.Println(version.String(appName))
+		return
+	}
+
 	a := app.NewWithID("com.github.funcan.macos-docker-spy")
 	tray, ok := a.(desktop.App)
 	if !ok {
@@ -75,6 +90,7 @@ func main() {
 		}
 	}
 	prefs := preferencesWindow(a, agent, exe)
+	about := aboutWindow(a)
 
 	m := &menu{
 		tray:       tray,
@@ -95,10 +111,14 @@ func main() {
 			prefs.Show()
 			prefs.RequestFocus()
 		}),
+		about: fyne.NewMenuItem("About "+appName, func() {
+			about.Show()
+			about.RequestFocus()
+		}),
 		lastDisk:        "-",
 		lastDiskPercent: -1,
 	}
-	m.menu.Items = []*fyne.MenuItem{m.disk, m.mem, m.load, m.cpu, fyne.NewMenuItemSeparator(), m.prefs, m.quit}
+	m.menu.Items = []*fyne.MenuItem{m.disk, m.mem, m.load, m.cpu, fyne.NewMenuItemSeparator(), m.about, m.prefs, m.quit}
 	tray.SetSystemTrayMenu(m.menu)
 	tray.SetSystemTrayIcon(whaleTemplate)
 
@@ -135,7 +155,7 @@ type menu struct {
 	greenIcon, yellowIcon, redIcon fyne.Resource
 	menu                           *fyne.Menu
 	disk, mem, load, cpu, err      *fyne.MenuItem
-	prefs, quit                    *fyne.MenuItem
+	about, prefs, quit             *fyne.MenuItem
 	lastDisk                       string
 	// -1 until the disk has been measured.
 	lastDiskPercent int
@@ -214,7 +234,7 @@ func (m *menu) show(icon fyne.Resource, disk, mem, load, cpu string, w warnings,
 			m.err.Label = "Error: " + first
 			m.menu.Items = append(m.menu.Items, m.err)
 		}
-		m.menu.Items = append(m.menu.Items, fyne.NewMenuItemSeparator(), m.prefs, m.quit)
+		m.menu.Items = append(m.menu.Items, fyne.NewMenuItemSeparator(), m.about, m.prefs, m.quit)
 		m.menu.Refresh()
 	})
 }
@@ -272,6 +292,24 @@ func preferencesWindow(a fyne.App, agent, exe string) fyne.Window {
 	// Sized for the settings still to come, rather than shrunk to fit them.
 	w.SetContent(container.NewPadded(container.NewVBox(login, form)))
 	w.Resize(fyne.NewSize(400, 240))
+	w.SetCloseIntercept(w.Hide)
+	return w
+}
+
+// aboutWindow returns a hidden window showing the version and a link to the
+// project. Closing it hides it again.
+func aboutWindow(a fyne.App) fyne.Window {
+	w := a.NewWindow("About " + appName)
+	link, err := url.Parse(repoURL)
+	if err != nil {
+		panic(err)
+	}
+	w.SetContent(container.NewPadded(container.NewVBox(
+		widget.NewLabelWithStyle(appName, fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
+		widget.NewLabelWithStyle(version.String(appName), fyne.TextAlignCenter, fyne.TextStyle{}),
+		container.NewCenter(widget.NewHyperlink(repoURL, link)),
+	)))
+	w.SetFixedSize(true)
 	w.SetCloseIntercept(w.Hide)
 	return w
 }

@@ -5,13 +5,22 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 
+	"github.com/Funcan/macos-docker-spy/internal/version"
 	"github.com/Funcan/macos-docker-spy/libdocker"
 )
 
 func main() {
+	showVersion := flag.Bool("version", false, "print the version and exit")
+	flag.Parse()
+	if *showVersion {
+		fmt.Println(version.String("probe"))
+		return
+	}
+
 	ctx := context.Background()
 
 	// Check first, as running a container would wake the VM from Resource Saver.

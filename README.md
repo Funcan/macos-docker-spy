@@ -22,6 +22,9 @@ quarantine flag:
 xattr -d com.apple.quarantine macos-docker-spy probe
 ```
 
+`probe --version` and `macos-docker-spy --version` print the installed
+version; the menu bar app also shows it under **About**.
+
 ## Menu bar app
 
 ```sh
