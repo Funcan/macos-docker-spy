@@ -27,5 +27,9 @@ func TestIcon(t *testing.T) {
 		if got := color.RGBAModel.Convert(img.At(16, 0)); got != bg {
 			t.Errorf("edge colour %v, want %v", got, bg)
 		}
+		// The middle of the whale's body is black.
+		if r, g, b, _ := img.At(14, 18).RGBA(); r|g|b != 0 {
+			t.Errorf("whale body colour %v, want black", img.At(14, 18))
+		}
 	}
 }

@@ -10,7 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"fyne.io/systray"
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/driver/desktop"
 
 	"github.com/Funcan/macos-docker-spy/libdocker"
 )
@@ -18,57 +20,63 @@ import (
 const refreshInterval = 10 * time.Second
 
 func main() {
-	systray.Run(onReady, func() {})
-}
-
-type menu struct {
-	disk, mem, load, cpu, err *systray.MenuItem
-	greenIcon, redIcon        []byte
-	lastDisk                  string
-}
-
-func onReady() {
+	a := app.NewWithID("com.github.funcan.macos-docker-spy")
+	tray, ok := a.(desktop.App)
+	if !ok {
+		fmt.Fprintln(os.Stderr, "no menu bar support")
+		os.Exit(1)
+	}
 	greenIcon, err := icon(green)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		systray.Quit()
-		return
+		os.Exit(1)
 	}
 	redIcon, err := icon(red)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		systray.Quit()
-		return
+		os.Exit(1)
 	}
-	systray.SetTemplateIcon(whalePNG, whalePNG)
-	systray.SetTooltip("Docker Desktop VM")
 
-	m := &menu{greenIcon: greenIcon, redIcon: redIcon, lastDisk: "-"}
-	m.disk = systray.AddMenuItem("", "")
-	m.mem = systray.AddMenuItem("", "")
-	m.load = systray.AddMenuItem("", "")
-	m.cpu = systray.AddMenuItem("", "")
-	m.err = systray.AddMenuItem("", "")
-	for _, item := range []*systray.MenuItem{m.disk, m.mem, m.load, m.cpu, m.err} {
-		item.Disable()
+	m := &menu{
+		tray:      tray,
+		greenIcon: fyne.NewStaticResource("green.png", greenIcon),
+		redIcon:   fyne.NewStaticResource("red.png", redIcon),
+		menu:      fyne.NewMenu("Docker Desktop VM"),
+		disk:      &fyne.MenuItem{Label: "Disk: -", Disabled: true},
+		mem:       &fyne.MenuItem{Label: "Memory: -", Disabled: true},
+		load:      &fyne.MenuItem{Label: "Load: -", Disabled: true},
+		cpu:       &fyne.MenuItem{Label: "CPU: -", Disabled: true},
+		err:       &fyne.MenuItem{Disabled: true},
+		// Fyne only adds its own Quit after drawing the menu, so it would be
+		// missing; with IsQuit set, Fyne makes this one quit the app.
+		quit:     &fyne.MenuItem{Label: "Quit", IsQuit: true},
+		lastDisk: "-",
 	}
-	m.err.Hide()
-	m.set("-", "-", "-", "-")
-	systray.AddSeparator()
-	quit := systray.AddMenuItem("Quit", "Quit macos-docker-spy")
-	go func() {
-		<-quit.ClickedCh
-		systray.Quit()
-	}()
+	m.menu.Items = []*fyne.MenuItem{m.disk, m.mem, m.load, m.cpu, fyne.NewMenuItemSeparator(), m.quit}
+	tray.SetSystemTrayMenu(m.menu)
+	tray.SetSystemTrayIcon(whaleTemplate)
 
 	// Refreshing in this one goroutine means refreshes never overlap; ticks
 	// that arrive during a slow refresh are dropped.
-	go func() {
-		m.refresh()
-		for range time.Tick(refreshInterval) {
+	a.Lifecycle().SetOnStarted(func() {
+		hideFromDock()
+		go func() {
 			m.refresh()
-		}
-	}()
+			for range time.Tick(refreshInterval) {
+				m.refresh()
+			}
+		}()
+	})
+	a.Run()
+}
+
+type menu struct {
+	tray                      desktop.App
+	greenIcon, redIcon        fyne.Resource
+	menu                      *fyne.Menu
+	disk, mem, load, cpu, err *fyne.MenuItem
+	quit                      *fyne.MenuItem
+	lastDisk                  string
 }
 
 // refresh updates the icon and menu. It never wakes the VM: stats are only
@@ -80,54 +88,53 @@ func (m *menu) refresh() {
 
 	status, err := libdocker.DockerDesktopStatus(ctx)
 	if errors.Is(err, libdocker.ErrDesktopNotRunning) || (err == nil && status.Status != "running") {
-		systray.SetTemplateIcon(whalePNG, whalePNG)
-		m.set("-", "-", "-", "-")
-		m.err.Hide()
+		m.show(whaleTemplate, "-", "-", "-", "-", nil)
 		return
 	}
 	if err != nil {
-		m.fail(err)
+		m.show(m.redIcon, "-", "-", "-", "-", err)
 		return
 	}
 
 	busy, err := libdocker.OtherContainersRunning(ctx)
 	if err != nil {
-		m.fail(err)
+		m.show(m.redIcon, "-", "-", "-", "-", err)
 		return
 	}
 	if !busy {
-		systray.SetTemplateIcon(whalePNG, whalePNG)
-		m.set(m.lastDisk, "(idle)", "(idle)", "(idle)")
-		m.err.Hide()
+		m.show(whaleTemplate, m.lastDisk, "(idle)", "(idle)", "(idle)", nil)
 		return
 	}
 
 	stats, err := libdocker.CollectVMStats(ctx)
 	if err != nil {
-		m.fail(err)
+		m.show(m.redIcon, "-", "-", "-", "-", err)
 		return
 	}
-	systray.SetIcon(m.greenIcon)
 	disk, mem, load, cpu := statLines(stats)
 	m.lastDisk = disk
-	m.set(disk, mem, load, cpu)
-	m.err.Hide()
+	m.show(m.greenIcon, disk, mem, load, cpu, nil)
 }
 
-func (m *menu) set(disk, mem, load, cpu string) {
-	m.disk.SetTitle("Disk: " + disk)
-	m.mem.SetTitle("Memory: " + mem)
-	m.load.SetTitle("Load: " + load)
-	m.cpu.SetTitle("CPU: " + cpu)
-}
-
-func (m *menu) fail(err error) {
-	systray.SetIcon(m.redIcon)
-	m.set("-", "-", "-", "-")
-	// Job errors can include a container's multi-line stderr.
-	first, _, _ := strings.Cut(err.Error(), "\n")
-	m.err.SetTitle("Error: " + first)
-	m.err.Show()
+// show sets the icon and menu, adding an error item if err isn't nil. It is
+// safe to call from any goroutine.
+func (m *menu) show(icon fyne.Resource, disk, mem, load, cpu string, err error) {
+	fyne.Do(func() {
+		m.tray.SetSystemTrayIcon(icon)
+		m.disk.Label = "Disk: " + disk
+		m.mem.Label = "Memory: " + mem
+		m.load.Label = "Load: " + load
+		m.cpu.Label = "CPU: " + cpu
+		m.menu.Items = []*fyne.MenuItem{m.disk, m.mem, m.load, m.cpu}
+		if err != nil {
+			// Job errors can include a container's multi-line stderr.
+			first, _, _ := strings.Cut(err.Error(), "\n")
+			m.err.Label = "Error: " + first
+			m.menu.Items = append(m.menu.Items, m.err)
+		}
+		m.menu.Items = append(m.menu.Items, fyne.NewMenuItemSeparator(), m.quit)
+		m.menu.Refresh()
+	})
 }
 
 // statLines formats stats for the disk, memory, load and CPU menu items.

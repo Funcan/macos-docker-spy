@@ -5,18 +5,24 @@ import (
 	_ "embed"
 	"image"
 	"image/color"
-	"image/draw"
 	"image/png"
 	"math"
+
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/theme"
+	"github.com/fyne-io/oksvg"
+	"github.com/srwiley/rasterx"
 )
 
-// whale.png is the menu bar glyph: black on transparent, 32x32 (the menu bar
-// shows icons at 16x16pt, i.e. 32x32px on Retina). Edit it freely; it is
-// drawn on top of the status background, or shown alone as a template image
-// (tinted by macOS to match the menu bar) when Docker Desktop isn't running.
+// whale.svg is the menu bar glyph. Edit it freely; it is drawn on top of the
+// status background, or shown alone as a template image (tinted by macOS to
+// match the menu bar) when the VM isn't busy.
 //
-//go:embed whale.png
-var whalePNG []byte
+//go:embed whale.svg
+var whaleSVG []byte
+
+// Fyne shows themed resources as macOS template images.
+var whaleTemplate = theme.NewThemedResource(fyne.NewStaticResource("whale.svg", whaleSVG))
 
 // Status background colours. These are Apple's system colours, which are
 // designed to read well in the menu bar in both light and dark mode.
@@ -26,16 +32,20 @@ var (
 	red    = color.RGBA{0xff, 0x3b, 0x30, 0xff}
 )
 
+// iconSize is in pixels. The menu bar shows icons at 16x16pt, i.e. 32x32px on
+// Retina.
+const iconSize = 32
+
 // icon returns a PNG of the whale on a rounded square of the given colour.
 func icon(bg color.Color) ([]byte, error) {
-	whale, err := png.Decode(bytes.NewReader(whalePNG))
+	whale, err := oksvg.ReadIconStream(bytes.NewReader(whaleSVG))
 	if err != nil {
 		return nil, err
 	}
-	bounds := whale.Bounds()
-	img := image.NewRGBA(bounds)
-	roundedRect(img, bg, float64(bounds.Dx())/4.5)
-	draw.Draw(img, bounds, whale, bounds.Min, draw.Over)
+	img := image.NewRGBA(image.Rect(0, 0, iconSize, iconSize))
+	roundedRect(img, bg, iconSize/4.5)
+	whale.SetTarget(0, 0, iconSize, iconSize)
+	whale.Draw(rasterx.NewDasher(iconSize, iconSize, rasterx.NewScannerGV(iconSize, iconSize, img, img.Bounds())), 1)
 
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, img); err != nil {
