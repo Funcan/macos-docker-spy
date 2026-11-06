@@ -11,7 +11,8 @@ docker image inspect docker-spy >/dev/null 2>&1 ||
 	docker build -q -t docker-spy "$(dirname "$0")/../probe-container" >/dev/null
 
 docker run --rm --privileged --pid=host docker-spy sh -c \
-	'df -k /var/lib/docker | tail -n 1; free -k | grep "^Mem:"; cat /proc/loadavg' |
+	'df -k /var/lib/docker | tail -n 1; free -k | grep "^Mem:"; cat /proc/loadavg
+	grep "^cpu " /proc/stat; sleep 1; grep "^cpu " /proc/stat' |
 awk '
 # Round up, as df -h does
 function ceil(x) { return int(x) + (x > int(x)) }
@@ -23,5 +24,15 @@ function human(kb) {
 NR == 1 { disk = sprintf("Disk %s of %s used (%s)  %s free", human($3), human($2), $5, human($4)) }
 NR == 2 { mem = sprintf("%s used %s buff/cache %s free", human($3), human($6), human($4)) }
 NR == 3 { load = sprintf("load %s %s %s", $1, $2, $3) }
-END { print disk " | " mem " | " load }
+# /proc/stat cpu fields: user nice system idle iowait irq softirq steal ...
+NR == 4 || NR == 5 {
+	usr[NR] = $2 + $3; sys[NR] = $4 + $7 + $8; idle[NR] = $5 + $6
+	for (i = 2; i <= 9; i++) total[NR] += $i
+}
+END {
+	t = total[5] - total[4]
+	cpu = sprintf("cpu %d%% usr %d%% sys %d%% idle", 100 * (usr[5] - usr[4]) / t,
+		100 * (sys[5] - sys[4]) / t, 100 * (idle[5] - idle[4]) / t)
+	print disk " | " mem " | " load " | " cpu
+}
 '
