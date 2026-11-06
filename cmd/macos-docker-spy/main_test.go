@@ -24,3 +24,23 @@ func TestStatLines(t *testing.T) {
 		}
 	}
 }
+
+func TestParseRefreshSeconds(t *testing.T) {
+	for _, tt := range []struct {
+		in   string
+		want int
+		ok   bool
+	}{
+		{"10", 10, true},
+		{" 5 ", 5, true},
+		{"4", 0, false},
+		{"", 0, false},
+		{"2.5", 0, false},
+		{"ten", 0, false},
+	} {
+		got, err := parseRefreshSeconds(tt.in)
+		if (err == nil) != tt.ok || got != tt.want {
+			t.Errorf("parseRefreshSeconds(%q) = %d, %v", tt.in, got, err)
+		}
+	}
+}

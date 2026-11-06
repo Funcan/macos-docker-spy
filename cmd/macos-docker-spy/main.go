@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,7 +21,12 @@ import (
 	"github.com/Funcan/macos-docker-spy/libdocker"
 )
 
-const refreshInterval = 10 * time.Second
+// Preference keys and defaults.
+const (
+	prefRefreshSeconds    = "refreshSeconds"
+	defaultRefreshSeconds = 10
+	minRefreshSeconds     = 5
+)
 
 func main() {
 	a := app.NewWithID("com.github.funcan.macos-docker-spy")
@@ -81,14 +87,27 @@ func main() {
 	tray.SetSystemTrayMenu(m.menu)
 	tray.SetSystemTrayIcon(whaleTemplate)
 
-	// Refreshing in this one goroutine means refreshes never overlap; ticks
-	// that arrive during a slow refresh are dropped.
+	// Changing a preference refreshes straight away, so the new period (and
+	// later settings) take effect without waiting out the old period.
+	changed := make(chan struct{}, 1)
+	a.Preferences().AddChangeListener(func() {
+		select {
+		case changed <- struct{}{}:
+		default:
+		}
+	})
+
+	// Refreshing in this one goroutine means refreshes never overlap.
 	a.Lifecycle().SetOnStarted(func() {
 		hideFromDock()
 		go func() {
-			m.refresh()
-			for range time.Tick(refreshInterval) {
+			for {
 				m.refresh()
+				period := a.Preferences().IntWithFallback(prefRefreshSeconds, defaultRefreshSeconds)
+				select {
+				case <-time.After(time.Duration(period) * time.Second):
+				case <-changed:
+				}
 			}
 		}()
 	})
@@ -175,11 +194,40 @@ func preferencesWindow(a fyne.App, agent, exe string) fyne.Window {
 			login.Refresh()
 		}
 	}
-	// Sized for the settings still to come, rather than shrunk to fit one.
-	w.SetContent(container.NewPadded(container.NewVBox(login)))
+
+	refresh := widget.NewEntry()
+	refresh.SetText(strconv.Itoa(a.Preferences().IntWithFallback(prefRefreshSeconds, defaultRefreshSeconds)))
+	refresh.Validator = func(s string) error {
+		_, err := parseRefreshSeconds(s)
+		return err
+	}
+	// Only valid values are saved, so the last good one stays in use.
+	refresh.OnChanged = func(s string) {
+		if n, err := parseRefreshSeconds(s); err == nil {
+			a.Preferences().SetInt(prefRefreshSeconds, n)
+		}
+	}
+
+	// Sized for the settings still to come, rather than shrunk to fit them.
+	w.SetContent(container.NewPadded(container.NewVBox(
+		login,
+		widget.NewForm(widget.NewFormItem("Refresh every (seconds)", refresh)),
+	)))
 	w.Resize(fyne.NewSize(400, 240))
 	w.SetCloseIntercept(w.Hide)
 	return w
+}
+
+// parseRefreshSeconds parses a refresh period typed into Preferences.
+func parseRefreshSeconds(s string) (int, error) {
+	n, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil {
+		return 0, errors.New("not a whole number")
+	}
+	if n < minRefreshSeconds {
+		return 0, fmt.Errorf("must be at least %d", minRefreshSeconds)
+	}
+	return n, nil
 }
 
 // statLines formats stats for the disk, memory, load and CPU menu items.
