@@ -28,7 +28,6 @@ release:
   prerelease: auto
 
 changelog:
-  sort: asc
   filters:
     exclude:
       - "^Merge "
