@@ -6,7 +6,7 @@ spot when it is getting overloaded.
 ## Usage
 
 ```sh
-./probe
+bin/probe
 ```
 
 ```

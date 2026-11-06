@@ -8,7 +8,7 @@ case $status in
 esac
 
 docker image inspect docker-spy >/dev/null 2>&1 ||
-	docker build -q -t docker-spy "$(dirname "$0")" >/dev/null
+	docker build -q -t docker-spy "$(dirname "$0")/../probe-container" >/dev/null
 
 docker run --rm --privileged --pid=host docker-spy sh -c \
 	'df -k /var/lib/docker | tail -n 1; free -k | grep "^Mem:"; cat /proc/loadavg' |
