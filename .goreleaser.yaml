@@ -18,6 +18,24 @@ builds:
       - -s -w
     mod_timestamp: "{{ .CommitTimestamp }}"
 
+  - id: macos-docker-spy
+    main: ./cmd/macos-docker-spy
+    binary: macos-docker-spy
+    # Fyne and the Dock icon code use Cocoa through cgo. The macOS runner's
+    # clang builds both architectures.
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
 archives:
   - formats: [tar.gz]
 
