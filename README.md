@@ -33,18 +33,28 @@ The icon shows the VM's state:
 - **Whale alone**: Docker Desktop is stopped (including Resource Saver mode),
   or no containers are running.
 - **Whale on green**: containers are running; the menu shows live stats.
+- **Whale on yellow**: a stat is over its warning threshold, and is marked
+  ⚠️ in the menu. While idle, only the last disk usage is checked.
 - **Whale on red**: something went wrong; the menu shows the error.
 
-Stats refresh every 10 seconds, but only while Docker Desktop is running and
-other containers are using it. Collecting them runs a container, which would
-otherwise wake a stopped VM, or keep Resource Saver from ever stopping it.
-When idle, the menu still shows the last disk usage.
+Stats refresh every 10 seconds by default, but only while Docker Desktop is
+running and other containers are using it. Collecting them runs a container,
+which would otherwise wake a stopped VM, or keep Resource Saver from ever
+stopping it. When idle, the menu still shows the last disk usage.
 
-**Preferences…** in the menu has a **Start at login** option, which adds a
-LaunchAgent at
-`~/Library/LaunchAgents/com.github.funcan.macos-docker-spy.plist`. It takes
-effect at the next login, and follows the binary if it moves (the app updates
-it each time it starts).
+**Preferences…** in the menu has:
+
+- **Start at login**, which adds a LaunchAgent at
+  `~/Library/LaunchAgents/com.github.funcan.macos-docker-spy.plist`. It takes
+  effect at the next login, and follows the binary if it moves (the app
+  updates it each time it starts).
+- **Refresh every (seconds)**: at least 5, default 10.
+- **Disk, Memory and CPU warning (%)**: the icon turns yellow when a stat is
+  above its threshold (defaults 90, 80 and 95). Memory is used / (used +
+  buff/cache + free), as the kernel can reclaim buff/cache. CPU is everything
+  but idle.
+
+Changes apply straight away. Invalid values are flagged and not saved.
 
 ## Probe
 
