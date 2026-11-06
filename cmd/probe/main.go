@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"os"
 
 	"github.com/Funcan/macos-docker-spy/libdocker"
@@ -36,20 +35,8 @@ func main() {
 
 func summarise(s libdocker.VMStats) string {
 	return fmt.Sprintf("Disk %s of %s used (%d%%)  %s free | %s used %s buff/cache %s free | load %.2f %.2f %.2f | cpu %d%% usr %d%% sys %d%% idle",
-		human(s.DiskUsedKB), human(s.DiskTotalKB), s.DiskUsedPercent, human(s.DiskFreeKB),
-		human(s.MemUsedKB), human(s.MemBuffCacheKB), human(s.MemFreeKB),
+		libdocker.HumanKB(s.DiskUsedKB), libdocker.HumanKB(s.DiskTotalKB), s.DiskUsedPercent, libdocker.HumanKB(s.DiskFreeKB),
+		libdocker.HumanKB(s.MemUsedKB), libdocker.HumanKB(s.MemBuffCacheKB), libdocker.HumanKB(s.MemFreeKB),
 		s.Load1, s.Load5, s.Load15,
 		int(s.CPUUser), int(s.CPUSystem), int(s.CPUIdle))
-}
-
-// human formats a size in KB, rounding up as df -h does.
-func human(kb int64) string {
-	if kb < 1024*1024 {
-		return fmt.Sprintf("%d MB", int(math.Ceil(float64(kb)/1024)))
-	}
-	gb := float64(kb) / 1024 / 1024
-	if gb < 10 {
-		return fmt.Sprintf("%.1f GB", math.Ceil(gb*10)/10)
-	}
-	return fmt.Sprintf("%d GB", int(math.Ceil(gb)))
 }

@@ -3,6 +3,7 @@ package libdocker
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -121,4 +122,16 @@ func numbers(fields []string) ([]float64, error) {
 		n = append(n, v)
 	}
 	return n, nil
+}
+
+// HumanKB formats a size in KB as MB or GB, rounding up as df -h does.
+func HumanKB(kb int64) string {
+	if kb < 1024*1024 {
+		return fmt.Sprintf("%d MB", int(math.Ceil(float64(kb)/1024)))
+	}
+	gb := float64(kb) / 1024 / 1024
+	if gb < 10 {
+		return fmt.Sprintf("%.1f GB", math.Ceil(gb*10)/10)
+	}
+	return fmt.Sprintf("%d GB", int(math.Ceil(gb)))
 }
